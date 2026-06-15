@@ -33,18 +33,45 @@ foreach ($it as $path => $info) {
     } elseif ($info->isDir()) {
         if (@rmdir($path) === false) {
             echo "\n=== REPRODUCED: rmdir failed (Directory not empty): $path ===\n";
-            echo "Leftover entries:\n";
-            foreach (array_diff(scandir($path), ['.', '..']) as $f) {
+            $leftovers = array_values(array_diff(scandir($path), ['.', '..']));
+            echo 'Leftover entries: ' . count($leftovers) . " (silly-rename .nfs* held open by the scanner)\n";
+            // NOTE: path-based `lsof -- <path>` and `lsof +D` do NOT match NFS
+            // silly-rename files (lsof's dev+inode matching misses them), so we
+            // resolve the holder by scanning /proc/<pid>/fd symlinks instead --
+            // this reliably names the process keeping the .nfs* file open.
+            $sample = array_slice($leftovers, 0, 5);
+            foreach ($sample as $f) {
                 echo "  $f\n";
-                $full = escapeshellarg("$path/$f");
-                echo "  lsof:\n";
-                passthru("lsof -- $full 2>/dev/null");
+                foreach (holdersOf("$path/$f") as $h) {
+                    echo "    held open by: $h\n";
+                }
             }
-            echo "lsof +D over the directory:\n";
-            passthru('lsof +D ' . escapeshellarg($path) . ' 2>/dev/null');
+            if (count($leftovers) > count($sample)) {
+                echo '  ... and ' . (count($leftovers) - count($sample)) . " more leftover entries\n";
+            }
             exit(42);
         }
     }
+}
+
+/**
+ * Find which processes hold the given file open, by scanning /proc/<pid>/fd
+ * symlinks for one that resolves to $target. Returns "pid <pid> (<comm>) fd <n>"
+ * strings. Reliable for NFS silly-rename (.nfs*) files, unlike lsof path match.
+ */
+function holdersOf($target) {
+    $out = [];
+    foreach (glob('/proc/[0-9]*/fd/*') as $fd) {
+        if (@readlink($fd) === $target) {
+            // /proc/<pid>/fd/<n>
+            $parts = explode('/', $fd);
+            $pid = $parts[2];
+            $n = $parts[4];
+            $comm = @trim(@file_get_contents("/proc/$pid/comm")) ?: '?';
+            $out[] = "pid $pid ($comm) fd $n";
+        }
+    }
+    return $out ?: ['(no holder found — handle already closed)'];
 }
 echo "All rmdir() succeeded — not reproduced this run (retry; it is timing-dependent).\n";
 exit(0);
