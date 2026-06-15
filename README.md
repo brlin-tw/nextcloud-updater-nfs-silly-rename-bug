@@ -3,8 +3,27 @@
 Reproduces the ODFWEB / Nextcloud updater **"Move new files in place"** failure
 (`rmdir: Directory not empty` / `無法移除資料夾`) that happens in production when
 the data/updater staging directory is on **NFS** and a local process holds files
-open during the move. Here the open-handle holder is **ClamAV on-access
-(realtime) scanning** — the same class of culprit as the production incident.
+open during the move.
+
+The open-handle holder here is a small **on-access-scanner emulator**
+(`provision/hold-open.php`): a pool of workers that, like real antimalware, each
+open a file, hold it only for a bounded **scan window** (`SCAN_WINDOW_MS`,
+default 15000ms), then close it and move on. The bug trips only when the
+updater's `unlink()` lands inside one of those windows — so it stays
+**intermittent / timing-dependent**, matching production (typically only a
+handful of files, not the whole tree, get silly-renamed per run).
+
+The default window (15s) is deliberately generous so the holding process is
+still open when `rmdir` fails and the diagnostic can name it; lower it toward a
+real scanner's sub-second scan time (`SCAN_WINDOW_MS=500`) for a more realistic
+but rarer trip. See **Notes & tuning**.
+
+> **Why not ClamAV?** This repro originally used ClamAV on-access (clamonacc)
+> realtime scanning as the holder, but that does **not** work over NFS:
+> clamonacc's fanotify (fd-holding) scanner cannot arm on an NFS mount — only its
+> non-blocking inotify "extra scanning" thread comes up, which never holds a
+> handle at `unlink()` time. So the bug never tripped. `clamav.sh` is left in the
+> tree for reference but is **not** required (and not sufficient) to reproduce.
 
 ## Why it fails
 
@@ -15,16 +34,16 @@ open during the move. Here the open-handle holder is **ClamAV on-access
    move, so PHP does copy + `unlink()`.
 2. `rmdir()`s the now-"empty" directory.
 
-If clamonacc has the file open via fanotify when PHP `unlink()`s it, the NFS
-client **silly-renames** it to `.nfsXXXXXXXX` in the same directory instead of
-deleting it. The directory is therefore not empty and `rmdir()` throws.
+If the holder has the file open when PHP `unlink()`s it, the NFS client
+**silly-renames** it to `.nfsXXXXXXXX` in the same directory instead of deleting
+it. The directory is therefore not empty and `rmdir()` throws.
 
 ## Topology
 
 | VM         | IP            | Role                                                    |
 |------------|---------------|---------------------------------------------------------|
 | `nfs`      | 192.168.56.10   | NFS server, exports `/export/data`                      |
-| `nextcloud`| 192.168.56.20   | Apache/PHP/MariaDB + Nextcloud; `/data` ← NFS; clamonacc|
+| `nextcloud`| 192.168.56.20   | Apache/PHP/MariaDB + Nextcloud; `/data` ← NFS; scanner emulator (clamonacc installed but unused — see note) |
 
 The Nextcloud **data directory lives on the NFS mount** (`/data/nextcloud-data`),
 so the updater staging dir is naturally on NFS — matching production
@@ -44,35 +63,55 @@ Expected tail of output:
 
 ```text
 === REPRODUCED: rmdir failed (Directory not empty): /data/.../3rdparty/.patches ===
-Leftover entries:
-  .nfs00000000abc...
-  lsof:
-  clamd  <pid> root ... /data/.../.patches/.nfs00000000abc...
+Leftover entries: 1 (silly-rename .nfs* held open by the scanner)
+  .nfs00000000000c0b7d00001b8c
+    held open by: pid 83943 (php) fd 5
 ############################################################
-# BUG REPRODUCED ...                                        #
+# BUG REPRODUCED on attempt 1: rmdir failed on NFS  #
 ############################################################
 ```
 
-The `lsof` output names the process (clamd/clamonacc) holding the silly-renamed
-file — the realtime-scanning equivalent of the production diagnosis.
+Usually only a **few** files (often just one) are silly-renamed per run — the
+ones whose `unlink()` happened to land inside a scan window — matching the
+production incident where a single leftover broke the step.
+
+The "held open by" line names the culprit process. It is resolved by scanning
+`/proc/<pid>/fd` symlinks, **not** `lsof`: path-based `lsof -- <path>` and
+`lsof +D` do **not** match NFS silly-rename (`.nfs*`) files — lsof's device+inode
+matching misses them, even though `lsof -p <pid>` would show the same handle. The
+`/proc` scan is reliable for this case. (For the holder to be named, its scan
+window must still be open when `rmdir` fails — see `SCAN_WINDOW_MS` below; with a
+very short window the handle may already be closed, leaving only the transient
+`.nfs*` file, which is itself a faithful illustration of how fleeting they are.)
 
 ## Files
 
 - `Vagrantfile` — two-VM definition.
 - `provision/nfs-server.sh` — NFS export.
 - `provision/nextcloud.sh` — Apache/PHP/MariaDB + Nextcloud, NFS mount, data dir on NFS.
-- `provision/clamav.sh` — ClamAV + on-access scanning (clamonacc) over `/data`.
+- `provision/clamav.sh` — ClamAV on-access (clamonacc) over `/data`. **Reference only** — does not hold handles over NFS (see note above); not needed to reproduce.
+- `provision/hold-open.php` — on-access-scanner emulator; each worker opens a file, holds it for `SCAN_WINDOW_MS`, closes it, and moves on (like real AV).
 - `provision/move-like-updater.php` — the updater's move logic, isolated.
-- `provision/run-repro.sh` — stages files, drives access, runs the move, reports.
+- `provision/run-repro.sh` — stages files, starts the holder, runs the move, reports.
 
 ## Notes & tuning
 
-- The failure is **timing-dependent**; `run-repro.sh` retries 5× and runs
-  background readers to keep the scanner busy. Raise `NFILES`/`READERS` in the
-  script if it does not trip on the first run.
-- Confirm the scanner is live: `vagrant ssh nextcloud -c 'journalctl -u clamonacc -n 30'`.
+- The failure is **timing-dependent** (as in production). `run-repro.sh` retries
+  5×. Tune via env vars:
+  - `SCANNERS` (default 6) — number of parallel scan workers (AV worker pool).
+  - `SCAN_WINDOW_MS` (default 15000) — how long each file is held open per scan.
+    Must outlive the move's pass over a directory so a scanner still holds the
+    handle when `rmdir` fails; then the `/proc`-based diagnostic can name the
+    culprit process. A shorter window is more realistic but often leaves only the
+    transient `.nfs*` file with no live holder to report.
+  - `NFILES` (default 4000) — size of the staged tree.
+
+  More scanners / a longer window → higher hit probability (toward
+  deterministic); fewer / shorter → rarer, more like a lightly-loaded scanner.
+  Example: `SCANNERS=12 SCAN_WINDOW_MS=1500 sudo -E /vagrant/provision/run-repro.sh`.
 - The same mechanism reproduces with any local open-handle holder (backup
-  agents, indexers, opcache) — ClamAV is just the most common realtime one.
+  agents, indexers, opcache, antivirus) — this emulator just models the
+  open→scan→close timing of a real on-access scanner.
 - **Fix under test:** point the updater staging dir at local disk (Nextcloud
   `updatedirectory` in `config.php`) so source and destination share a
   filesystem; `rename()` becomes atomic with no copy+unlink and no silly rename.
