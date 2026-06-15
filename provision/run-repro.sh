@@ -13,24 +13,31 @@ set -uo pipefail
 STAGE=/data/nextcloud-data/updater-repro/downloads/nextcloud
 DEST=/var/www/html/move-dest-$$        # local ext4, forces cross-device rename
 NFILES=4000
-READERS=4
-HOLDER_LOG=/tmp/nfs-holder-$$.log      # processes caught holding .nfs* files
+SCANNERS="${SCANNERS:-6}"              # parallel scan "workers" (AV worker pool)
+SCAN_WINDOW_MS="${SCAN_WINDOW_MS:-15000}" # how long each file is held open per scan.
+                                          # Must outlive the move's pass over the
+                                          # directory (unlink -> ... -> rmdir) so the
+                                          # holder still has the fd open when lsof runs
+                                          # at failure -- otherwise only a lingering
+                                          # .nfs* file remains and lsof is empty.
+
+# Each scanner holds only a few fds at a time, but raise the limit for headroom.
+ulimit -n 65536 2>/dev/null || true
 
 cleanup() {
   echo "=== cleanup ==="
-  [ -n "${READER_PIDS:-}" ] && kill $READER_PIDS 2>/dev/null
-  [ -n "${MONITOR_PID:-}" ] && kill $MONITOR_PID 2>/dev/null
+  [ -n "${SCANNER_PIDS:-}" ] && kill $SCANNER_PIDS 2>/dev/null
   wait 2>/dev/null
   rm -rf "$DEST" /data/nextcloud-data/updater-repro 2>/dev/null
-  rm -f "$HOLDER_LOG" 2>/dev/null
 }
 trap cleanup EXIT
 
-echo "=== checking clamonacc is active ==="
-if ! systemctl is-active --quiet clamonacc; then
-  echo "WARNING: clamonacc not active; the bug needs the realtime scanner running." >&2
-  systemctl status --no-pager clamonacc || true
-fi
+# NOTE: clamonacc is NOT a viable open-handle holder here -- its fanotify
+# (fd-holding) scanner cannot arm on an NFS mount, so it never holds handles
+# over /data. Instead we emulate an on-access scanner with hold-open.php: each
+# worker opens a file, holds it for ~SCAN_WINDOW_MS, then closes it and moves
+# on -- like real antimalware. The bug trips only when the updater's unlink()
+# lands inside one of those short open windows, so it stays timing-dependent.
 
 echo "=== staging $NFILES files under $STAGE (NFS) ==="
 rm -rf /data/nextcloud-data/updater-repro
@@ -43,15 +50,13 @@ for i in $(seq 1 "$NFILES"); do
 done
 echo "staged $(find "$STAGE" -type f | wc -l) files."
 
-echo "=== starting $READERS background readers (provoke on-access scans) ==="
-READER_PIDS=""
-for _ in $(seq 1 "$READERS"); do
-  ( while true; do
-      find "$STAGE" -type f -exec cat {} + >/dev/null 2>&1
-    done ) &
-  READER_PIDS="$READER_PIDS $!"
+echo "=== starting $SCANNERS scan workers (window ${SCAN_WINDOW_MS}ms) over $STAGE ==="
+SCANNER_PIDS=""
+for _ in $(seq 1 "$SCANNERS"); do
+  php /vagrant/provision/hold-open.php "$STAGE" "$SCAN_WINDOW_MS" &
+  SCANNER_PIDS="$SCANNER_PIDS $!"
 done
-sleep 3   # let clamonacc start opening files
+sleep 2   # let the scanners get into their scan loop before the move
 
 echo "=== running updater-style move (rename to $DEST + rmdir) ==="
 ATTEMPTS=5
@@ -63,6 +68,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "tree consumed by a prior attempt; re-staging quickly..."
     mkdir -p "$STAGE/3rdparty/.patches"
     for i in $(seq 1 500); do head -c 8192 /dev/urandom > "$STAGE/3rdparty/.patches/file_$i.dat"; done
+    sleep 2   # let the holder open the re-staged files before moving
   fi
   php /vagrant/provision/move-like-updater.php "$STAGE" "$DEST"
   rc=$?
@@ -71,7 +77,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo
     echo "############################################################"
     echo "# BUG REPRODUCED on attempt $attempt: rmdir failed on NFS  #"
-    echo "# (.nfsXXXXXXXX silly-rename held by clamonacc/clamd)       #"
+    echo "# (.nfsXXXXXXXX silly-rename; open handle held by holder)   #"
     echo "############################################################"
     break
   fi
