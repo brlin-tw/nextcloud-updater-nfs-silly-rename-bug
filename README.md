@@ -66,7 +66,7 @@ Refer to the following instructions to reproduce the bug:
     vagrant ssh nextcloud -c 'sudo php /vagrant/provision/hold-open.php'
     ```
 
-1. Open <http://192.168.56.20/> in a Web browser and log-in using the admin/admin12345 default credentials.
+1. Open <http://192.168.56.20/> in a web browser and log-in using the admin/admin12345 default credentials.
 1. In the User menu > Administration settings > Administration > Overview > Update section click the "Open updater" blue button to launch the updater and follow the steps to update the Nextcloud instance.
 
    **Note:** If no updates are available, switch the update channel to `Beta` and reload the page to trigger the update check.
