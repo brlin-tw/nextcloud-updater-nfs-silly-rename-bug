@@ -2,7 +2,7 @@
 /**
  * On-access-scanner emulator for the NFS silly-rename reproducer.
  *
- * Mimics how real-time antimalware (clamonacc, Defender, ...) touches files:
+ * Mimics how real-time antimalware (Defender, on-access scanners, ...) touches files:
  * it opens a file, holds the descriptor only for a short "scan window"
  * (default ~3s), then closes it and moves on to the next file -- it does
  * NOT keep every file open forever. The silly-rename (and the resulting

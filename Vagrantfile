@@ -3,15 +3,15 @@
 #
 # Multi-VM reproducer for the ODFWEB / Nextcloud updater "Move new files in
 # place" failure (rmdir: Directory not empty) that occurs when the data /
-# updater staging directory lives on NFS and a local process (here: ClamAV
-# on-access scanning) holds files open during the move, causing the NFS
-# client to create .nfsXXXXXXXX silly-rename files.
+# updater staging directory lives on NFS and a local process (here: an
+# on-access-scanner emulator) holds files open during the move, causing the
+# NFS client to create .nfsXXXXXXXX silly-rename files.
 #
 # Topology:
 #   nfs       192.168.56.10  - Ubuntu NFS server, exports /export/data
 #   nextcloud 192.168.56.20  - Ubuntu + Apache/PHP/MariaDB + Nextcloud,
-#                            mounts the export at /data, runs ClamAV
-#                            on-access (clamonacc) realtime scanning over /data
+#                            mounts the export at /data, runs the on-access
+#                            scanner emulator over /data during the move
 #
 # Usage:
 #   vagrant up
@@ -41,6 +41,5 @@ Vagrant.configure("2") do |config|
     end
     # NFS server must be up first so the mount in nextcloud.sh succeeds.
     nc.vm.provision "shell", path: "provision/nextcloud.sh"
-    nc.vm.provision "shell", path: "provision/clamav.sh"
   end
 end

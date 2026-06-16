@@ -1,11 +1,11 @@
 #!/bin/bash
 # Reproduce the updater "Move new files in place" failure on the Nextcloud VM.
 #
-# Stages a realistic file tree in the updater staging dir on NFS, generates
-# continuous read access so ClamAV on-access (clamonacc) holds files open, then
-# performs the updater's move (rename to local disk + rmdir). When clamonacc has
-# a handle open at rmdir time, the NFS client has silly-renamed the file to
-# .nfsXXXXXXXX and rmdir fails with "Directory not empty".
+# Stages a realistic file tree in the updater staging dir on NFS, runs a pool of
+# on-access-scanner emulators (hold-open.php) that hold files open in short scan
+# windows, then performs the updater's move (rename to local disk + rmdir). When
+# a scanner has a handle open at rmdir time, the NFS client has silly-renamed the
+# file to .nfsXXXXXXXX and rmdir fails with "Directory not empty".
 #
 # Run on the nextcloud VM:  sudo /vagrant/provision/run-repro.sh
 set -uo pipefail
@@ -32,12 +32,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# NOTE: clamonacc is NOT a viable open-handle holder here -- its fanotify
-# (fd-holding) scanner cannot arm on an NFS mount, so it never holds handles
-# over /data. Instead we emulate an on-access scanner with hold-open.php: each
-# worker opens a file, holds it for ~SCAN_WINDOW_MS, then closes it and moves
-# on -- like real antimalware. The bug trips only when the updater's unlink()
-# lands inside one of those short open windows, so it stays timing-dependent.
+# We emulate an on-access scanner with hold-open.php: each worker opens a file,
+# holds it for ~SCAN_WINDOW_MS, then closes it and moves on -- like real
+# antimalware. The bug trips only when the updater's unlink() lands inside one
+# of those short open windows, so it stays timing-dependent.
 
 echo "=== staging $NFILES files under $STAGE (NFS) ==="
 rm -rf /data/nextcloud-data/updater-repro
@@ -85,8 +83,8 @@ done
 
 if [ "$rc" -ne 42 ]; then
   echo
-  echo "Not reproduced in $ATTEMPTS attempts. Increase NFILES/READERS or"
-  echo "confirm clamonacc is scanning /data (journalctl -u clamonacc)."
+  echo "Not reproduced in $ATTEMPTS attempts. Increase SCANNERS/NFILES or"
+  echo "lengthen SCAN_WINDOW_MS and retry (the failure is timing-dependent)."
 fi
 
 exit 0

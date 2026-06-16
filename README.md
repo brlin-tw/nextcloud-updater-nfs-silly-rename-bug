@@ -1,4 +1,4 @@
-# NFS + ClamAV updater `rmdir` failure reproducer (Vagrant)
+# NFS + on-access-scanner updater `rmdir` failure reproducer (Vagrant)
 
 Reproduces the ODFWEB / Nextcloud updater **"Move new files in place"** failure
 (`rmdir: Directory not empty` / `無法移除資料夾`) that happens in production when
@@ -22,8 +22,9 @@ but rarer trip. See **Notes & tuning**.
 > realtime scanning as the holder, but that does **not** work over NFS:
 > clamonacc's fanotify (fd-holding) scanner cannot arm on an NFS mount — only its
 > non-blocking inotify "extra scanning" thread comes up, which never holds a
-> handle at `unlink()` time. So the bug never tripped. `clamav.sh` is left in the
-> tree for reference but is **not** required (and not sufficient) to reproduce.
+> handle at `unlink()` time. So the bug never tripped. That is why the holder
+> here is the `hold-open.php` emulator, which opens files directly over the NFS
+> mount instead of relying on fanotify.
 
 ## Why it fails
 
@@ -43,7 +44,7 @@ it. The directory is therefore not empty and `rmdir()` throws.
 | VM         | IP            | Role                                                    |
 |------------|---------------|---------------------------------------------------------|
 | `nfs`      | 192.168.56.10   | NFS server, exports `/export/data`                      |
-| `nextcloud`| 192.168.56.20   | Apache/PHP/MariaDB + Nextcloud; `/data` ← NFS; scanner emulator (clamonacc installed but unused — see note) |
+| `nextcloud`| 192.168.56.20   | Apache/PHP/MariaDB + Nextcloud; `/data` ← NFS; runs the on-access-scanner emulator |
 
 The Nextcloud **data directory lives on the NFS mount** (`/data/nextcloud-data`),
 so the updater staging dir is naturally on NFS — matching production
@@ -52,7 +53,6 @@ so the updater staging dir is naturally on NFS — matching production
 ## Usage
 
 ```bash
-cd vagrant-nfs-clamav-repro
 vagrant up                       # brings up both VMs (NFS first, then nextcloud)
 
 # Reproduce the failure:
@@ -89,7 +89,6 @@ very short window the handle may already be closed, leaving only the transient
 - `Vagrantfile` — two-VM definition.
 - `provision/nfs-server.sh` — NFS export.
 - `provision/nextcloud.sh` — Apache/PHP/MariaDB + Nextcloud, NFS mount, data dir on NFS.
-- `provision/clamav.sh` — ClamAV on-access (clamonacc) over `/data`. **Reference only** — does not hold handles over NFS (see note above); not needed to reproduce.
 - `provision/hold-open.php` — on-access-scanner emulator; each worker opens a file, holds it for `SCAN_WINDOW_MS`, closes it, and moves on (like real AV).
 - `provision/move-like-updater.php` — the updater's move logic, isolated.
 - `provision/run-repro.sh` — stages files, starts the holder, runs the move, reports.
