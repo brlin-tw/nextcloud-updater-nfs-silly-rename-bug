@@ -18,7 +18,7 @@
 #   vagrant ssh nextcloud -c 'sudo /vagrant/provision/run-repro.sh'
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "bento/ubuntu-22.04"
+  config.vm.box = "bento/ubuntu-24.04"
   config.vm.synced_folder ".", "/vagrant"
 
   config.vm.provider "virtualbox" do |vb|
