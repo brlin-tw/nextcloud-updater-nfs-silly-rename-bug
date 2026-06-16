@@ -13,15 +13,62 @@
  * Run several copies in parallel (like an AV worker pool) to raise the odds
  * that some file is mid-scan at any given moment.
  *
- * Argv: <root> [scan_window_ms=750]
+ * Argv: [root] [scan_window_ms=15000]
+ * When <root> is omitted, the Nextcloud updater staging directory
+ * (<datadirectory>/updater-<instanceid>) is auto-detected via occ.
  * Loops forever (re-scanning the tree, randomized order) until killed.
  */
-if ($argc < 2) {
-    fwrite(STDERR, "Usage: php hold-open.php <root> [scan_window_ms]\n");
+$root = (isset($argv[1]) && $argv[1] !== '') ? $argv[1] : detectUpdaterDir();
+if ($root === null || $root === '') {
+    fwrite(STDERR, "Usage: php hold-open.php [root] [scan_window_ms]\n");
+    fwrite(STDERR, "Could not auto-detect the Nextcloud updater staging directory.\n");
     exit(1);
 }
-$root = $argv[1];
 $windowUs = (isset($argv[2]) ? (int)$argv[2] : 15000) * 1000;   // ms -> us
+
+fwrite(STDERR, "holding open: $root\n");
+
+/**
+ * Auto-detect the Nextcloud updater staging directory by querying occ for the
+ * data directory and instance id: <datadirectory>/updater-<instanceid>.
+ * occ is run as the user owning occ (typically www-data) to avoid the
+ * "executed with the wrong user" refusal when this script runs as root.
+ */
+function detectUpdaterDir() {
+    $occ = getenv('NC_OCC') ?: '/var/www/html/nextcloud/occ';
+    if (!is_file($occ)) {
+        return null;
+    }
+    $dataDir = occGet($occ, 'datadirectory');
+    $instanceId = occGet($occ, 'instanceid');
+    if ($dataDir === null || $instanceId === null) {
+        return null;
+    }
+    return rtrim($dataDir, '/') . '/updater-' . $instanceId;
+}
+
+/**
+ * Run `occ config:system:get <key>` as occ's owner and return the trimmed value
+ * (or null on failure).
+ */
+function occGet($occ, $key) {
+    $runAs = '';
+    $ownerId = @fileowner($occ);
+    if ($ownerId !== false && function_exists('posix_getpwuid')) {
+        $owner = posix_getpwuid($ownerId);
+        if ($owner && posix_geteuid() !== $ownerId) {
+            $runAs = 'sudo -u ' . escapeshellarg($owner['name']) . ' ';
+        }
+    }
+    $cmd = $runAs . 'php ' . escapeshellarg($occ)
+        . ' config:system:get ' . escapeshellarg($key) . ' 2>/dev/null';
+    $value = @shell_exec($cmd);
+    if ($value === null) {
+        return null;
+    }
+    $value = trim($value);
+    return $value === '' ? null : $value;
+}
 
 $running = true;
 if (function_exists('pcntl_signal')) {
