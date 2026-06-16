@@ -102,4 +102,12 @@ PHPINI
 
 systemctl restart apache2
 
-echo "=== [nextcloud] done. Updater staging dir will live under $NC_DATA (NFS). ==="
+echo "=== [nextcloud] creating updater staging dir keyed by instanceid ==="
+INSTANCE_ID=$(sudo -u www-data php "$NC_DIR/occ" config:system:get instanceid)
+UPDATER_DIR="$NC_DATA/updater-${INSTANCE_ID}"
+mkdir -p "$UPDATER_DIR"
+chown www-data:www-data "$UPDATER_DIR"
+chmod 0770 "$UPDATER_DIR"
+echo "[nextcloud] created $UPDATER_DIR"
+
+echo "=== [nextcloud] done. Updater staging dir will live under $UPDATER_DIR (NFS). ==="
