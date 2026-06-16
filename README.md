@@ -1,4 +1,4 @@
-# NFS + on-access-scanner updater `rmdir` failure reproducer (Vagrant)
+# NFS + on-access-scanner Nextcloud updater `rmdir` failure reproducer (Vagrant)
 
 Reproduces the ODFWEB / Nextcloud updater **"Move new files in place"** failure
 (`rmdir: Directory not empty` / `無法移除資料夾`) that happens in production when
