@@ -37,6 +37,7 @@ Vagrant.configure("2") do |config|
     nc.vm.network "private_network", ip: "192.168.56.20"
     nc.vm.provider "virtualbox" do |vb|
       vb.memory = 3072
+      vb.cpus = 4
     end
     # NFS server must be up first so the mount in nextcloud.sh succeeds.
     nc.vm.provision "shell", path: "provision/nextcloud.sh"
