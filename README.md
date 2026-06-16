@@ -50,10 +50,40 @@ so the updater staging dir is naturally on NFS.
 
 ## Usage
 
-```bash
-vagrant up                       # brings up both VMs (NFS first, then nextcloud)
+Refer to the following instructions to reproduce the bug:
 
-# Reproduce the failure:
+1. Run the following command to provision the test VMs(NFS first, then nextcloud):
+
+    ```bash
+    vagrant up
+    ```
+
+1. Run the following command to emulate the on-access-scanner temporarily holding files in the updater staging directory:
+
+    ```bash
+    vagrant ssh nextcloud -c 'sudo php /vagrant/provision/hold-open.php'
+    ```
+
+1. Open <http://192.168.56.20/> in a Web browser and log-in using the admin/admin12345 default credentials.
+1. In the User menu > Administration settings > Administration > Overview > Update section click the "Open updater" blue button to launch the updater and follow the steps to update the Nextcloud instance.
+
+   **Note:** If no updates are available, switch the update channel to `Beta` and reload the page to trigger the update check.
+
+## Expected behavior
+
+Update completed without error.
+
+## Current behavior
+
+Update failed during the "Move new files in place" step with an `rmdir: Directory not empty` error, caused by a `.nfs*` file left behind by the on-access-scanner emulator scanning some of the files in the updater staging directory.
+
+## Use the alternative reproducer script
+
+The `provision/run-repro.sh` script stages a tree of files on the NFS export, starts the holder, simulates the logic of `moveWithExclusions()`, and reports any leftover `.nfs*` files that cause `rmdir` to fail.
+
+Run the following command to execute the repro script on the `nextcloud` VM:
+
+```bash
 vagrant ssh nextcloud -c 'sudo /vagrant/provision/run-repro.sh'
 ```
 
