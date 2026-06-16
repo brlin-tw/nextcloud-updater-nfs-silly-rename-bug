@@ -28,8 +28,7 @@ but rarer trip. See **Notes & tuning**.
 
 ## Why it fails
 
-`moveWithExclusions()` (`updaterOdfweb/index.php:889`, upstream
-`updater/lib/Updater.php:1163`) iterates CHILD_FIRST and, per entry:
+`moveWithExclusions()` (`updater/lib/Updater.php:1163`) iterates CHILD_FIRST and, per entry:
 
 1. `rename()`s each file from NFS to the local web root — a **cross-device**
    move, so PHP does copy + `unlink()`.
@@ -47,8 +46,7 @@ it. The directory is therefore not empty and `rmdir()` throws.
 | `nextcloud`| 192.168.56.20   | Apache/PHP/MariaDB + Nextcloud; `/data` ← NFS; runs the on-access-scanner emulator |
 
 The Nextcloud **data directory lives on the NFS mount** (`/data/nextcloud-data`),
-so the updater staging dir is naturally on NFS — matching production
-(`production-fstab.jpg`, `production-datafs-mount-parameters.jpg`).
+so the updater staging dir is naturally on NFS.
 
 ## Usage
 
