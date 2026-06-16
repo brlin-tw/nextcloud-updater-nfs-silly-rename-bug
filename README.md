@@ -5,6 +5,8 @@ Reproduces the ODFWEB / Nextcloud updater **"Move new files in place"** failure
 the data/updater staging directory is on **NFS** and a local process holds files
 open during the move.
 
+<https://github.com/brlin-tw/nextcloud-updater-nfs-silly-rename-bug>
+
 The open-handle holder here is a small **on-access-scanner emulator**
 (`provision/hold-open.php`): a pool of workers that, like real antimalware, each
 open a file, hold it only for a bounded **scan window** (`SCAN_WINDOW_MS`,
