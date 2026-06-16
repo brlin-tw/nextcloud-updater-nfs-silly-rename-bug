@@ -93,6 +93,13 @@ APACHE
 a2dissite 000-default >/dev/null 2>&1 || true
 a2ensite nextcloud >/dev/null
 a2enmod rewrite headers env dir mime >/dev/null
+
+echo "=== [nextcloud] raising PHP memory_limit to 1G for the Apache (Nextcloud) SAPI ==="
+PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+cat >"/etc/php/${PHP_VER}/apache2/conf.d/90-nextcloud.ini" <<'PHPINI'
+memory_limit = 1G
+PHPINI
+
 systemctl restart apache2
 
 echo "=== [nextcloud] done. Updater staging dir will live under $NC_DATA (NFS). ==="
